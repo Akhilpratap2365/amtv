@@ -17,7 +17,6 @@ import java.util.function.Supplier;
 
 /**
  * Simple, compact round frosted-glass pointer for the remote with a soft ripple effect on click.
- * Lives in its own hardware-accelerated window above the activity so moving it never redraws the WebView.
  */
 final class Cursor extends View implements Choreographer.FrameCallback {
     private static final long GLIDE_AFTER_MS = 180, HIDE_AFTER_MS = 4000, RIPPLE_MS = 450, HOVER_EVERY_MS = 100;
@@ -189,13 +188,18 @@ final class Cursor extends View implements Choreographer.FrameCallback {
     }
 
     private void tap() {
-        // Cancel any pending hover so a delayed mouse-hover event never fires during a touch tap
         removeCallbacks(hover);
         hoverQueued = false;
         View v = target.get();
         if (v == null) return;
+        v.setFocusable(true);
+        v.setFocusableInTouchMode(true);
         v.requestFocus();
+        v.requestFocusFromTouch();
         long t = SystemClock.uptimeMillis();
+        // Close any active mouse hover state before dispatching the touch tap so Chromium's
+        // ImeAdapter treats the tap as a clean touchscreen gesture on <input> elements.
+        send(v, mouse(MotionEvent.ACTION_HOVER_EXIT, x, y, 0, 0), false);
         send(v, finger(t, t, MotionEvent.ACTION_DOWN), true);
         postDelayed(() -> send(v, finger(t, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP), true), 40);
         tappedAt = t;

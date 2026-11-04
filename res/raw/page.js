@@ -1,7 +1,7 @@
 // Injected into music.apple.com to run the official Apple Music website in full screen
 // with Guaranteed 1600px Desktop Width & Lyrics Button locked across phones, 1080p TVs, and 4K TVs,
-// while fixing Full-Screen Player layout/alignment, keeping the Search keyboard open,
-// and preserving AMTV's low-CPU WebGL throttling.
+// while fixing Full-Screen Player layout/alignment, locking Search input focus so the TV keyboard
+// always opens and stays open, and preserving AMTV's low-CPU WebGL throttling.
 (function () {
   'use strict';
 
@@ -57,7 +57,7 @@
   ].join('\n');
 
   function isTextInput(el) {
-    if (!el) return false;
+    if (!el || typeof el !== 'object') return false;
     var tag = (el.tagName || '').toUpperCase();
     if (tag === 'TEXTAREA' || el.isContentEditable) return true;
     if (tag === 'INPUT') {
@@ -67,11 +67,18 @@
     return false;
   }
 
+  function deepActiveElement() {
+    var a = document.activeElement;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) {
+      a = a.shadowRoot.activeElement;
+    }
+    return a;
+  }
+
   var applyingViewport = false;
   function applyGuaranteed1600pxViewport() {
     if (applyingViewport) return;
-    // Never mutate <head> viewport meta while a text input is actively focused (prevents Android IME dismissal)
-    if (isTextInput(document.activeElement)) return;
+    if (isTextInput(deepActiveElement())) return;
     applyingViewport = true;
     try {
       var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
@@ -189,7 +196,6 @@
     }
   }, true);
 
-  // Keep 1600px viewport locked on layout changes and page load (but do not run on vertical IME keyboard resize)
   var lastWindowWidth = window.innerWidth;
   window.addEventListener('DOMContentLoaded', applyGuaranteed1600pxViewport, { passive: true });
   window.addEventListener('load', applyGuaranteed1600pxViewport, { passive: true });
@@ -215,55 +221,125 @@
   if (document.head) observeHead();
   else window.addEventListener('DOMContentLoaded', observeHead, { once: true });
 
-  // Protect Search input focus so Apple Music's /search route transition never blurs and closes the TV keyboard
-  var lastInputTapAt = 0;
-  function findSearchInput(target) {
-    if (!target) return null;
-    if (isTextInput(target)) return target;
-    if (target.closest) {
-      var wrapper = target.closest('[data-testid*="search" i], [class*="search" i], form, label');
-      if (wrapper) {
-        var inner = wrapper.querySelector('input[type="search"], input[type="text"], input:not([type="hidden"])');
+  // ---------------------------------------------------------------------------
+  // GUARANTEED SEARCH BAR & TEXT INPUT KEYBOARD LOCK (Pierces Shadow DOM & Blocks Router Blur)
+  // ---------------------------------------------------------------------------
+  var origFocus = HTMLElement.prototype.focus;
+  var origBlur = HTMLElement.prototype.blur;
+  var lockedInput = null;
+  var lockedUntil = 0;
+
+  // Walk Light DOM + Shadow DOM to find a visible text/search <input> inside a root
+  function findInputDeep(root) {
+    if (!root) return null;
+    if (isTextInput(root)) return root;
+    var found = null;
+    try {
+      if (root.querySelector) {
+        found = root.querySelector('input[type="search"], input[type="text"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea');
+        if (found) return found;
+      }
+      if (root.shadowRoot) {
+        found = findInputDeep(root.shadowRoot);
+        if (found) return found;
+      }
+      var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].shadowRoot) {
+          found = findInputDeep(all[i].shadowRoot);
+          if (found) return found;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function findInputFromEvent(ev) {
+    if (!ev) return null;
+    var path = (typeof ev.composedPath === 'function') ? ev.composedPath() : [ev.target];
+    for (var i = 0; i < path.length; i++) {
+      var n = path[i];
+      if (!n || n === window || n === document || n === document.documentElement || n === document.body) continue;
+      if (isTextInput(n)) return n;
+      var tag = (n.tagName || '').toLowerCase();
+      var cls = (typeof n.className === 'string' ? n.className : '').toLowerCase();
+      var tid = (n.getAttribute && (n.getAttribute('data-testid') || n.getAttribute('aria-label') || n.getAttribute('role') || '') || '').toLowerCase();
+      // Only treat compact search boxes/forms/labels as input wrappers (never the whole page)
+      if (tag === 'label' || tag === 'form' || tag.indexOf('search') >= 0
+          || cls.indexOf('search-input') >= 0 || cls.indexOf('search-box') >= 0
+          || tid.indexOf('search-input') >= 0 || tid.indexOf('search-box') >= 0) {
+        var inner = findInputDeep(n);
         if (inner) return inner;
       }
     }
     return null;
   }
 
+  // Block Apple Music's router/accessibility manager from blurring the search input or stealing
+  // focus onto <main>/<body> right after the user taps the search bar
+  HTMLElement.prototype.blur = function () {
+    if (this === lockedInput && Date.now() < lockedUntil) {
+      return;
+    }
+    return origBlur.apply(this, arguments);
+  };
+
+  HTMLElement.prototype.focus = function () {
+    if (lockedInput && Date.now() < lockedUntil && this !== lockedInput && !isTextInput(this)) {
+      return;
+    }
+    return origFocus.apply(this, arguments);
+  };
+
+  function requestKeyboardForInput(inp) {
+    if (!inp) return;
+    lockedInput = inp;
+    lockedUntil = Date.now() + 1800;
+    var trigger = function () {
+      var current = (lockedInput && lockedInput.isConnected) ? lockedInput : findInputDeep(document);
+      if (current) {
+        lockedInput = current;
+        try { origFocus.call(current, { preventScroll: true }); } catch (e) { try { origFocus.call(current); } catch (e2) {} }
+      }
+      try { window.AmtvNative && window.AmtvNative.keyboard && window.AmtvNative.keyboard(); } catch (e) {}
+    };
+    trigger();
+    setTimeout(trigger, 60);
+    setTimeout(trigger, 180);
+    setTimeout(trigger, 360);
+  }
+
   document.addEventListener('pointerdown', function (ev) {
-    var inp = findSearchInput(ev.target);
-    if (inp) lastInputTapAt = Date.now();
+    var inp = findInputFromEvent(ev);
+    if (inp) {
+      lockedInput = inp;
+      lockedUntil = Date.now() + 1800;
+    } else if (lockedInput) {
+      // User tapped outside the input: unlock so it can blur normally
+      lockedInput = null;
+      lockedUntil = 0;
+    }
   }, true);
 
   document.addEventListener('click', function (ev) {
-    var inp = findSearchInput(ev.target);
-    if (!inp) return;
-    lastInputTapAt = Date.now();
-    // After Apple Music's click/router handler finishes (e.g. navigating to /search), ensure the input stays focused
-    setTimeout(function () {
-      var activeInp = ( inp.isConnected ? inp : document.querySelector('input[type="search"], .search-input input, [data-testid*="search" i] input') );
-      if (activeInp) {
-        if (document.activeElement !== activeInp) activeInp.focus();
-        try { window.AmtvNative && window.AmtvNative.keyboard && window.AmtvNative.keyboard(); } catch (e) {}
-      }
-    }, 120);
+    var inp = findInputFromEvent(ev);
+    if (inp) {
+      requestKeyboardForInput(inp);
+    }
   }, true);
 
-  // If Apple Music's /search route transition blurs the search input right after tapping it, restore focus immediately
-  document.addEventListener('focusout', function (ev) {
-    if (Date.now() - lastInputTapAt < 650 && isTextInput(ev.target)) {
-      var prev = ev.target;
-      setTimeout(function () {
-        if (!isTextInput(document.activeElement)) {
-          var targetInp = (prev && prev.isConnected)
-            ? prev
-            : document.querySelector('input[type="search"], .search-input input, [data-testid*="search" i] input');
-          if (targetInp) {
-            targetInp.focus();
-            try { window.AmtvNative && window.AmtvNative.keyboard && window.AmtvNative.keyboard(); } catch (e) {}
-          }
-        }
-      }, 50);
+  document.addEventListener('focusin', function (ev) {
+    var path = (typeof ev.composedPath === 'function') ? ev.composedPath() : [ev.target];
+    var topTarget = path[0] || ev.target;
+    if (isTextInput(topTarget)) {
+      requestKeyboardForInput(topTarget);
+    }
+  }, true);
+
+  document.addEventListener('keydown', function (ev) {
+    if (ev && (ev.key === 'Enter' || ev.key === 'Escape')) {
+      lockedInput = null;
+      lockedUntil = 0;
     }
   }, true);
 
