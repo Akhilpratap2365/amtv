@@ -1,0 +1,16 @@
+AMTV — Apple Music for Android TV & Google TV (unofficial)
+Copyright (c) 2026 megarohas. Licensed under the MIT License (see LICENSE).
+
+Third-party material
+--------------------
+Icons: several glyphs in res/raw/tv_core.js (play, pause, next, previous, shuffle,
+repeat, search, home, settings and others) and the music note in the launcher icon
+and banner are based on Material Icons by Google, licensed under the Apache License,
+Version 2.0: https://github.com/google/material-design-icons/blob/master/LICENSE
+
+Trademarks
+----------
+Apple, Apple Music and Apple ID are trademarks of Apple Inc. This project is not
+affiliated with, authorized or endorsed by Apple Inc. It contains no Apple fonts,
+icons or logos, and it does not circumvent DRM: playback is done by Apple's own web
+player (music.apple.com) with the device's Widevine.

@@ -1,0 +1,20 @@
+# AMTV — Apple Music for Android TV & Google TV
+
+> Unofficial, open-source (MIT) Apple Music app for Android TV / Google TV boxes and TVs (Xiaomi Mi Box, Chromecast with Google TV, NVIDIA Shield, Onn, TVs with Google TV). It runs Apple's official web player (music.apple.com) in a WebView and adds a remote-friendly (D-pad) interface on top: Home, Browse, Radio, Library, Search, album/playlist/artist pages, a calm Now Playing screen with lyrics and favorites. No DRM circumvention; requires an Apple Music subscription. Android 10+, Widevine.
+
+## Install
+- APK (latest release): https://github.com/megarohas/apple-music-android-tv/releases/latest/download/amtv.apk
+- Easiest: install "Downloader" from Google Play on the TV, allow Unknown sources, open the APK URL above.
+- ADB: `adb install amtv.apk`
+
+## Automation (Android intents)
+- Play a station/playlist/album: `adb shell am start -n com.megarohas.amtv/.MainActivity --es play <id>` (ids from Apple Music links: `ra.…` stations, `pl.…` playlists, numeric albums)
+- Player: `--es cmd next|prev|pause|play|toggle|favorite|unfavorite`
+
+## Docs
+- English README: https://github.com/megarohas/apple-music-android-tv/blob/release/README.md
+- Russian README: https://github.com/megarohas/apple-music-android-tv/blob/release/README.ru.md
+- Source map: MainActivity.java (WebView, keys, intents), res/raw/tv_core.js (focus engine, API, playback), tv_screens.js (screens), tv_player.js (Now Playing)
+
+## Related
+- Voice remote that drives AMTV: https://github.com/megarohas/megarohas_tv_voice

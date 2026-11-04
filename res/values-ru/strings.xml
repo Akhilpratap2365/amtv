@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Apple Music</string>
+    <string name="status_starting">Запускаю…</string>
+    <string name="status_opening">Открываю Apple Music…</string>
+    <string name="status_interface">Загружаю Apple Music…</string>
+    <string name="status_region">Открываю Apple Music вашей страны…</string>
+    <string name="status_play">Включаю музыку…</string>
+    <string name="error_open">Не удалось открыть %1$s</string>
+    <string name="error_retry">Нажмите OK, чтобы повторить</string>
+</resources>
