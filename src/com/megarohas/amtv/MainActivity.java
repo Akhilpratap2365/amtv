@@ -10,6 +10,7 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Outline;
+import android.graphics.PixelFormat;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -61,14 +62,13 @@ public class MainActivity extends Activity {
 
     private FrameLayout pages;                                // the main page, popups/fullscreen on top
     private WebView web;
-    private int lastAppliedScale = -1;                        // avoid resetting IME by calling setInitialScale redundantly
+    private int lastAppliedScale = -1;                        // prevents redundant setInitialScale calls from closing IME
     private int lastViewportWidthPx = -1;
     private final ArrayList<WebView> popups = new ArrayList<>();
     private View customView;                                  // HTML5 Fullscreen custom view
     private WebChromeClient.CustomViewCallback customViewCallback;
     private Cursor cursor;
     private String pageJs;
-    private String signinJs;                                  // remote-friendly look for Apple's sign-in popup
     private boolean pageReady;
     private View splash;                                      // until the Apple Music page renders
     private TextView splashStatus;
@@ -113,21 +113,13 @@ public class MainActivity extends Activity {
 
         root = new FrameLayout(this);
         root.addView(pages, FILL);
-
-        // Attach cursor directly inside root FrameLayout (hardware-accelerated overlay View)
-        // instead of a separate TYPE_APPLICATION_PANEL WindowManager window, so the main Activity
-        // window always retains unambiguous IME (soft keyboard) target focus on Android TV.
-        cursor = new Cursor(this, this::activeTarget, () -> web.evaluateJavascript("window.__amtv&&__amtv.wake(2500)", null));
-        cursor.setClickable(false);
-        cursor.setFocusable(false);
-        cursor.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        cursor.setVisibility(View.INVISIBLE);                 // shown as soon as splash lifts
-        root.addView(cursor, FILL);
-
         setContentView(root);
         showSplash(str("status_starting"));
 
-        signinJs = raw("signin");
+        cursor = new Cursor(this, this::activeTarget, () -> {});
+        cursor.setVisibility(View.INVISIBLE);                 // shown as soon as splash lifts
+        pages.post(this::attachCursor);
+
         pageJs = "window.__amtvVersion=" + js(versionName()) + ";\n" + raw("page");
 
         applyGuaranteed1600pxViewport(web, true);
@@ -151,7 +143,7 @@ public class MainActivity extends Activity {
      * Locked via applyGuaranteed1600pxViewport on layout changes and page load
      * across phones, 1080p TVs, and 4K TVs.
      * Only calls v.setInitialScale when the computed scale actually changes so an open soft keyboard
-     * (IME) is never dismissed by a redundant page-scale reset during SPA pushState or IME layout passes.
+     * (IME) is never dismissed by a redundant page-scale reset.
      */
     private void applyGuaranteed1600pxViewport(WebView v, boolean forceScale) {
         if (v == null) return;
@@ -174,25 +166,6 @@ public class MainActivity extends Activity {
                 lastAppliedScale = scalePercent;
                 lastViewportWidthPx = widthPx;
                 v.setInitialScale(scalePercent);
-            }
-        }
-    }
-
-    private void showKeyboardNow() {
-        View targetView = activeTarget();
-        if (targetView == null) return;
-        targetView.setFocusable(true);
-        targetView.setFocusableInTouchMode(true);
-        targetView.requestFocus();
-        targetView.requestFocusFromTouch();
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (imm != null) {
-            boolean ok = imm.showSoftInput(targetView, 0);
-            if (!ok) {
-                ok = imm.showSoftInput(targetView, InputMethodManager.SHOW_IMPLICIT);
-            }
-            if (!ok) {
-                imm.showSoftInput(targetView, InputMethodManager.SHOW_FORCED);
             }
         }
     }
@@ -236,6 +209,19 @@ public class MainActivity extends Activity {
     private void flushPlay() {
         if (pendingPlay == null || !pageReady) return;
         web.evaluateJavascript("window.__amtvPlay='" + pendingPlay + "';window.__tv&&__tv.flushPlay()", null);
+    }
+
+    /** A see-through panel window over the activity: redrawing it leaves the page's window alone. */
+    private void attachCursor() {
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(-1, -1,
+                WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                PixelFormat.TRANSLUCENT);
+        lp.token = pages.getWindowToken();
+        lp.setTitle("amtv cursor");
+        getWindowManager().addView(cursor, lp);
     }
 
     private final ArrayList<android.animation.Animator> splashAnims = new ArrayList<>();
@@ -447,7 +433,6 @@ public class MainActivity extends Activity {
         statusFading = false;
         pages.removeCallbacks(statusPump);
         pages.removeCallbacks(splashTimeout);
-        cursor.bringToFront();
         cursor.setVisibility(View.VISIBLE);
         cursor.show();
         v.animate().alpha(0).setDuration(300).withEndAction(() -> {
@@ -505,8 +490,6 @@ public class MainActivity extends Activity {
                 return screenReader ? super.getAccessibilityNodeProvider() : null;
             }
         };
-        v.setFocusable(true);
-        v.setFocusableInTouchMode(true);
         WebSettings s = v.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -598,10 +581,6 @@ public class MainActivity extends Activity {
         @Override
         public void onPageFinished(WebView v, String url) {
             if (v != web) {
-                if (signinPage(url) && !signinJs.isEmpty()) {
-                    v.evaluateJavascript(signinJs, null);
-                }
-                cursor.bringToFront();
                 cursor.setVisibility(View.VISIBLE);
                 cursor.show();
                 return;
@@ -682,7 +661,6 @@ public class MainActivity extends Activity {
             customViewCallback = callback;
             customView.setBackgroundColor(Color.BLACK);
             pages.addView(customView, FILL);
-            cursor.bringToFront();
             cursor.setVisibility(View.VISIBLE);
             cursor.show();
             Log.i(TAG, "entered fullscreen custom view");
@@ -697,7 +675,6 @@ public class MainActivity extends Activity {
                 customViewCallback.onCustomViewHidden();
                 customViewCallback = null;
             }
-            cursor.bringToFront();
             cursor.setVisibility(View.VISIBLE);
             cursor.show();
             Log.i(TAG, "exited fullscreen custom view");
@@ -710,7 +687,6 @@ public class MainActivity extends Activity {
             pages.addView(p, FILL);
             ((WebView.WebViewTransport) result.obj).setWebView(p);
             result.sendToTarget();
-            cursor.bringToFront();
             cursor.setVisibility(View.VISIBLE);
             cursor.show();
             Log.i(TAG, "popup opened");
@@ -727,7 +703,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void mode(String m) {
             runOnUiThread(() -> {
-                cursor.bringToFront();
                 cursor.setVisibility(View.VISIBLE);
                 cursor.show();
             });
@@ -735,7 +710,11 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void keyboard() {
-            runOnUiThread(MainActivity.this::showKeyboardNow);
+            runOnUiThread(() -> {
+                View targetView = activeTarget();
+                targetView.requestFocus();
+                ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(targetView, 0);
+            });
         }
 
         @JavascriptInterface
@@ -808,16 +787,10 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static boolean signinPage(String url) {
-        String h = url == null ? null : Uri.parse(url).getHost();
-        return "idmsa.apple.com".equals(h) || "authorize.music.apple.com".equals(h);
-    }
-
     private void close(WebView p) {
         if (!popups.remove(p)) return;
         pages.removeView(p);
         p.destroy();
-        cursor.bringToFront();
         cursor.setVisibility(View.VISIBLE);
         cursor.show();
         Log.i(TAG, "popup closed");
@@ -887,6 +860,7 @@ public class MainActivity extends Activity {
         AccessibilityManager am = (AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
         am.removeAccessibilityStateChangeListener(a11yChanged);
         am.removeTouchExplorationStateChangeListener(touchChanged);
+        if (cursor.isAttachedToWindow()) getWindowManager().removeViewImmediate(cursor);
         for (WebView p : popups) p.destroy();
         web.destroy();
         super.onDestroy();
